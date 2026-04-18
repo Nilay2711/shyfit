@@ -2,65 +2,85 @@ import json
 import faiss
 import numpy as np
 import os
-from sentence_transformers import SentenceTransformer
-
-model = SentenceTransformer("all-MiniLM-L6-v2")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-with open(os.path.join(BASE_DIR, "final_dataset.json"), "r") as f:
-    data = json.load(f)
+# --- Lazy globals ---
+_model = None
+_index = None
+_metadata = None
 
-documents = []
-metadata = []
+def _load():
+    global _model, _index, _metadata
+    if _model is not None:
+        return  # Already loaded
 
-for item in data:
-    text = ""
+    from sentence_transformers import SentenceTransformer
+    _model = SentenceTransformer("all-MiniLM-L6-v2")
 
-    if item["type"] == "workout_plan":
-        text = f"WORKOUT PLAN {item['goal']} {item['level']} {item['title']} {item['content']}"
+    embeddings_path = os.path.join(BASE_DIR, "embeddings.npy")
+    metadata_path = os.path.join(BASE_DIR, "metadata.json")
 
-    elif item["type"] == "exercise":
-        text = f"EXERCISE {item['name']} {' '.join(item['muscles'])} {item['content']}"
-    elif item["type"] == "fitness_knowledge":
-        text = f"FITNESS KNOWLEDGE {item['topic']} {item['content']}"
+    if os.path.exists(embeddings_path) and os.path.exists(metadata_path):
+        print("Loading saved embeddings...")
+        embeddings = np.load(embeddings_path)
+        with open(metadata_path, "r") as f:
+            _metadata = json.load(f)
+    else:
+        print("Creating embeddings...")
+        with open(os.path.join(BASE_DIR, "final_dataset.json"), "r") as f:
+            data = json.load(f)
 
-    documents.append(text)
-    metadata.append(item)
+        documents = []
+        _metadata = []
+        for item in data:
+            if item["type"] == "workout_plan":
+                text = f"WORKOUT PLAN {item['goal']} {item['level']} {item['title']} {item['content']}"
+            elif item["type"] == "exercise":
+                text = f"EXERCISE {item['name']} {' '.join(item['muscles'])} {item['content']}"
+            elif item["type"] == "fitness_knowledge":
+                text = f"FITNESS KNOWLEDGE {item['topic']} {item['content']}"
+            else:
+                text = item.get("content", "")
+            documents.append(text)
+            _metadata.append(item)
 
+        embeddings = _model.encode(documents)
+        embeddings = np.array(embeddings).astype("float32")
+        np.save(embeddings_path, embeddings)
+        with open(metadata_path, "w") as f:
+            json.dump(_metadata, f)
 
-
-
-if os.path.exists("embeddings.npy"):
-    print("Loading saved embeddings...")
-    embeddings = np.load("embeddings.npy")
-
-    with open("metadata.json", "r") as f:
-        metadata = json.load(f)
-
-else:
-    print("Creating embeddings...")
-    embeddings = model.encode(documents)
     embeddings = np.array(embeddings).astype("float32")
+    dimensions = embeddings.shape[1]
+    _index = faiss.IndexFlatL2(dimensions)
+    _index.add(embeddings)
+    print("Retriever ready.")
 
-    np.save("embeddings.npy", embeddings)
 
-    with open("metadata.json", "w") as f:
-        json.dump(metadata, f)
+def search(query, k=5, type_filter=None):
+    _load()
+    query_vector = _model.encode([query])
+    query_vector = np.array(query_vector).astype("float32")
+    distances, indices = _index.search(query_vector, 50)
 
+    results = []
+    for idx in indices[0]:
+        item = _metadata[idx]
+        if type_filter and item["type"] != type_filter:
+            continue
+        formatted = {"type": item["type"]}
+        if item["type"] == "workout_plan":
+            formatted.update({"title": item["title"], "goal": item["goal"], "level": item["level"], "content": item["content"]})
+        elif item["type"] == "exercise":
+            formatted.update({"name": item["name"], "muscles": item["muscles"], "content": item["content"]})
+        elif item["type"] == "fitness_knowledge":
+            formatted.update({"topic": item["topic"], "content": item["content"]})
+        results.append(formatted)
+        if len(results) >= k:
+            break
+    return results
 
-embeddings = np.array(embeddings).astype("float32")
-
-np.save("embeddings.npy", embeddings)
-
-with open("metadata.json", "w") as f:
-    json.dump(metadata, f)
-
-dimensions = embeddings.shape[1]
-
-index = faiss.IndexFlatL2(dimensions)
-
-index.add(embeddings)
 
 def search_all_types(query):
     return {
@@ -70,56 +90,7 @@ def search_all_types(query):
     }
 
 
-def search(query, k=5, type_filter=None):
-    query_vector = model.encode([query])
-    query_vector = np.array(query_vector).astype("float32")
-
-    distances, indices = index.search(query_vector, 50)
-
-    results = []
-
-    for idx in indices[0]:
-        item = metadata[idx]
-
-        if type_filter and item["type"] != type_filter:
-            continue
-
-        # Format response
-        formatted = {
-            "type": item["type"]
-        }
-
-        if item["type"] == "workout_plan":
-            formatted.update({
-                "title": item["title"],
-                "goal": item["goal"],
-                "level": item["level"],
-                "content": item["content"]
-            })
-
-        elif item["type"] == "exercise":
-            formatted.update({
-                "name": item["name"],
-                "muscles": item["muscles"],
-                "content": item["content"]
-            })
-
-        elif item["type"] == "fitness_knowledge":
-            formatted.update({
-                "topic": item["topic"],
-                "content": item["content"]
-            })
-
-        results.append(formatted)
-
-        if len(results) >= k:
-            break
-
-    return results
-
 if __name__ == "__main__":
     query = "beginner fat loss workout"
-
     results = search_all_types(query)
-
     print(json.dumps(results, indent=2))
