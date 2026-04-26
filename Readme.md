@@ -1,5 +1,11 @@
 # 💪 ShyFit – RAG-Based AI Fitness Assistant
 
+🚀 **Live Demo**
+Frontend: https://shyfit.netlify.app
+Backend API: https://shyfit.onrender.com
+
+---
+
 ShyFit is an AI-powered fitness assistant that generates personalized workout plans and answers fitness-related questions using a **Retrieval-Augmented Generation (RAG)** system.
 
 ---
@@ -137,12 +143,11 @@ POST /chat
 ## 🚀 Deployment
 
 * Backend → Render
-* Frontend → Vercel
+* Frontend → Netlify
 
 Update API URLs in frontend after deployment.
 
 ---
-
 
 ## 📌 Future Improvements
 
